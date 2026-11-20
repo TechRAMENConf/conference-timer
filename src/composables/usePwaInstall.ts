@@ -12,6 +12,7 @@ export function usePwaInstall() {
   const hasUpdate = ref(false);
   let deferredPrompt: BeforeInstallPromptEvent | null = null;
   let waitingRegistration: ServiceWorkerRegistration | null = null;
+  let reloadingForUpdate = false;
 
   function detectEnvironment(): void {
     if (typeof window === "undefined") return;
@@ -37,6 +38,12 @@ export function usePwaInstall() {
     isStandalone.value = true;
   }
 
+  function handleControllerChange(): void {
+    if (reloadingForUpdate) {
+      window.location.reload();
+    }
+  }
+
   async function triggerInstall(): Promise<boolean> {
     if (!deferredPrompt) return false;
     await deferredPrompt.prompt();
@@ -48,7 +55,9 @@ export function usePwaInstall() {
 
   function reloadToUpdate(): void {
     if (waitingRegistration?.waiting) {
+      reloadingForUpdate = true;
       waitingRegistration.waiting.postMessage({ type: "SKIP_WAITING" });
+      return;
     }
     window.location.reload();
   }
@@ -59,10 +68,14 @@ export function usePwaInstall() {
     window.addEventListener("appinstalled", handleAppInstalled);
 
     if ("serviceWorker" in navigator && import.meta.env.PROD) {
+      navigator.serviceWorker.addEventListener("controllerchange", handleControllerChange);
       void navigator.serviceWorker
         .register("./sw.js", { scope: "./" })
         .then((registration) => {
           waitingRegistration = registration;
+          if (registration.waiting) {
+            hasUpdate.value = true;
+          }
           registration.addEventListener("updatefound", () => {
             const worker = registration.installing;
             if (!worker) return;
@@ -82,6 +95,9 @@ export function usePwaInstall() {
   onBeforeUnmount(() => {
     window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
     window.removeEventListener("appinstalled", handleAppInstalled);
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.removeEventListener("controllerchange", handleControllerChange);
+    }
   });
 
   return {
