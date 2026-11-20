@@ -70,8 +70,8 @@ describe("timerLogic", () => {
   });
 
   it("formats clock time with optional nearest-minute rounding", () => {
-    const t1 = new Date("2026-11-21T15:02:10+09:00").getTime();
-    const t2 = new Date("2026-11-21T15:02:50+09:00").getTime();
+    const t1 = new Date(2026, 10, 21, 15, 2, 10).getTime();
+    const t2 = new Date(2026, 10, 21, 15, 2, 50).getTime();
     expect(formatClockTime(t1)).toBe("15:02");
     expect(formatClockTime(t2)).toBe("15:02");
     expect(formatClockTime(t1, true)).toBe("15:02");
