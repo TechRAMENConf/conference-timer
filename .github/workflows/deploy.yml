@@ -21,26 +21,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1.22.0
         with:
-          node-version: 24
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+          cache: true
+          cache-toolchain: true
 
       - name: Check formatting, lint, and types
-        run: pnpm check
+        run: vp check
 
       - name: Run unit and component tests
-        run: pnpm test:unit
+        run: vp test
 
-      - name: Build static site
-        run: pnpm build
+      - name: Type-check and build static site
+        run: vp run build:all
         env:
           VITE_BASE_PATH: /${{ github.event.repository.name }}/
 

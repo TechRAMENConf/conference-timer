@@ -23,7 +23,7 @@
 ## 開発コマンド（Vite+）
 
 ```sh
-# 依存関係のインストール
+# 依存関係のインストール（同時に Git hooks を設定）
 pnpm install
 
 # 開発サーバー起動 (vp dev)
@@ -35,8 +35,11 @@ pnpm check
 # テスト実行 (vp test)
 pnpm test:unit
 
-# 本番ビルド (vue-tsc + vp build)
+# 型チェック + 本番ビルド (vp run build:all)
 pnpm build
+
+# チェック・テスト・ビルドを一括実行 (Vite Task キャッシュ対応)
+pnpm exec vp run verify
 
 # ビルド結果のローカルプレビュー (vp preview)
 pnpm preview

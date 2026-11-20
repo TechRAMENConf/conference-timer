@@ -5,7 +5,7 @@ import { fileURLToPath, URL } from "node:url";
 
 import vue from "@vitejs/plugin-vue";
 import vueDevTools from "vite-plugin-vue-devtools";
-import { defineConfig, lazyPlugins, type Plugin } from "vite-plus";
+import { configDefaults, defineConfig, lazyPlugins, type Plugin } from "vite-plus";
 
 function collectDistFiles(rootDir: string, dir = rootDir): string[] {
   const entries = readdirSync(dir);
@@ -62,7 +62,7 @@ function pwaPrecachePlugin(): Plugin {
   };
 }
 
-// https://vite.dev/config/
+// https://viteplus.dev/config/
 export default defineConfig({
   base: process.env.VITE_BASE_PATH ?? "./",
   fmt: {},
@@ -70,6 +70,32 @@ export default defineConfig({
     jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
     rules: { "vite-plus/prefer-vite-plus-imports": "error" },
     options: { typeAware: true, typeCheck: true },
+  },
+  staged: {
+    "*": "vp check --fix",
+  },
+  run: {
+    cache: {
+      scripts: true,
+      tasks: true,
+    },
+    tasks: {
+      typecheck: {
+        command: "vue-tsc --build",
+      },
+      "build:all": {
+        command: "vp build",
+        dependsOn: ["typecheck"],
+      },
+      verify: {
+        command: ["vp check", "vp test", "vp run build:all"],
+      },
+    },
+  },
+  test: {
+    environment: "jsdom",
+    exclude: [...configDefaults.exclude, "e2e/**"],
+    root: fileURLToPath(new URL("./", import.meta.url)),
   },
   plugins: lazyPlugins(() => [vue(), vueDevTools(), pwaPrecachePlugin()]),
   resolve: {
