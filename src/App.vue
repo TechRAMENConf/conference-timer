@@ -20,8 +20,6 @@ const {
   endEtaClock,
   activePresetId,
   wakeLock,
-  start,
-  pause,
   toggleStartPause,
   reset,
   adjustSeconds,
@@ -29,6 +27,7 @@ const {
   applyDuration,
   setThresholds,
   setAutoThresholds,
+  updateConfig,
 } = useTimer();
 
 const { isStandalone, canInstallPrompt, isIosOrIpadOs, hasUpdate, triggerInstall, reloadToUpdate } =
@@ -69,6 +68,8 @@ const primaryBtnLabel = computed(() => {
   return "スタート";
 });
 
+const isLongDigits = computed(() => formatted.value.digits.replace(/^\+/, "").length > 5);
+
 const quickPresets = computed(() => TECHRAMEN_PRESETS.slice(0, 4));
 
 function handlePrimaryClick(): void {
@@ -77,7 +78,18 @@ function handlePrimaryClick(): void {
   toggleStartPause();
 }
 
-function handleLockPressStart(): void {
+function toggleLockByKeyboard(): void {
+  clearTimeout(unlockTimerId);
+  isUnlocking.value = false;
+  isLocked.value = !isLocked.value;
+  if (isLocked.value) {
+    drawerOpen.value = false;
+  }
+}
+
+function handleLockPressStart(event: PointerEvent): void {
+  // Keyboard activation is handled via keydown handlers
+  if (event.pointerType === "") return;
   if (!isLocked.value) {
     isLocked.value = true;
     drawerOpen.value = false;
@@ -116,19 +128,19 @@ function syncFullscreenState(): void {
 
 function handleKeydown(event: KeyboardEvent): void {
   const target = event.target as HTMLElement | null;
-  if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) {
-    return;
-  }
-
-  if (event.key === "Escape" && drawerOpen.value) {
-    drawerOpen.value = false;
+  if (
+    target &&
+    (target.tagName === "INPUT" ||
+      target.tagName === "TEXTAREA" ||
+      target.tagName === "SELECT" ||
+      target.isContentEditable)
+  ) {
     return;
   }
 
   if (event.key.toLowerCase() === "l") {
     event.preventDefault();
-    isLocked.value = !isLocked.value;
-    if (isLocked.value) drawerOpen.value = false;
+    toggleLockByKeyboard();
     return;
   }
 
@@ -141,6 +153,8 @@ function handleKeydown(event: KeyboardEvent): void {
   if (isLocked.value || drawerOpen.value) return;
 
   if (event.code === "Space") {
+    // Avoid double-triggering when a button is already focused
+    if (target?.tagName === "BUTTON") return;
     event.preventDefault();
     handlePrimaryClick();
   } else if (event.key.toLowerCase() === "r") {
@@ -167,16 +181,6 @@ onBeforeUnmount(() => {
   clearTimeout(unlockTimerId);
   document.removeEventListener("fullscreenchange", syncFullscreenState);
   window.removeEventListener("keydown", handleKeydown);
-});
-
-defineExpose({
-  status,
-  phase,
-  formatted,
-  isLocked,
-  start,
-  pause,
-  reset,
 });
 </script>
 
@@ -259,6 +263,8 @@ defineExpose({
           @pointerup="handleLockPressCancel"
           @pointerleave="handleLockPressCancel"
           @pointercancel="handleLockPressCancel"
+          @keydown.enter.prevent="toggleLockByKeyboard"
+          @keydown.space.prevent="toggleLockByKeyboard"
         >
           <PaperIcons :name="isLocked ? 'lock' : 'unlock'" size="1rem" />
           <span class="hud-btn__label">
@@ -302,7 +308,7 @@ defineExpose({
         </p>
         <div
           class="digits"
-          :class="{ 'is-overtime': formatted.isOvertime, 'is-long': formatted.digits.length > 5 }"
+          :class="{ 'is-overtime': formatted.isOvertime, 'is-long': isLongDigits }"
           role="timer"
           :aria-label="`残り時間 ${formatted.digits}`"
         >
@@ -395,6 +401,7 @@ defineExpose({
 
     <SetupDrawer
       :open="drawerOpen"
+      :is-timer-active="status !== 'idle'"
       :config="config"
       :active-preset-id="activePresetId"
       :preview-phase="previewPhase"
@@ -406,7 +413,7 @@ defineExpose({
       @apply-duration="applyDuration"
       @update-thresholds="setThresholds"
       @toggle-auto-thresholds="setAutoThresholds"
-      @update-config="(patch) => Object.assign(config, patch)"
+      @update-config="updateConfig"
       @set-preview-phase="(p) => (previewPhase = p)"
       @install-pwa="triggerInstall"
     />
@@ -424,7 +431,6 @@ defineExpose({
 .stage {
   position: relative;
   min-height: 100dvh;
-  height: 100dvh;
   display: grid;
   grid-template-rows: auto 1fr auto;
   padding: max(0.85rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
@@ -432,7 +438,8 @@ defineExpose({
   background-color: var(--stage-bg);
   background-image: var(--stage-bg-accent);
   color: var(--stage-fg);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   transition:
     background-color 0.45s var(--ease-settle),
     color 0.3s ease;
@@ -707,7 +714,7 @@ defineExpose({
   transform-origin: left center;
   background: var(--stage-gauge-fill);
   border-radius: inherit;
-  transition: transform 0.2s linear;
+  transition: transform 0.25s ease-out;
 }
 
 .gauge-marker {

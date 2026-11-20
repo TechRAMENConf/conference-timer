@@ -112,9 +112,54 @@ export function normalizeThresholds(
   criticalSeconds: number,
 ): { warnSeconds: number; criticalSeconds: number } {
   const safeDuration = clampDurationSeconds(durationSeconds);
-  const safeWarn = Math.max(2, Math.min(safeDuration - 1, Math.round(warnSeconds)));
-  const safeCritical = Math.max(1, Math.min(safeWarn - 1, Math.round(criticalSeconds)));
+  const safeWarnRaw = Number.isFinite(warnSeconds) ? Math.round(warnSeconds) : 2;
+  const safeCriticalRaw = Number.isFinite(criticalSeconds) ? Math.round(criticalSeconds) : 1;
+  const safeWarn = Math.max(2, Math.min(safeDuration - 1, safeWarnRaw));
+  const safeCritical = Math.max(1, Math.min(safeWarn - 1, safeCriticalRaw));
   return { warnSeconds: safeWarn, criticalSeconds: safeCritical };
+}
+
+export function sanitizeConfig(raw: unknown): TimerConfig {
+  const obj = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+
+  const durationSeconds =
+    typeof obj.durationSeconds === "number" && Number.isFinite(obj.durationSeconds)
+      ? clampDurationSeconds(obj.durationSeconds)
+      : DEFAULT_TIMER_CONFIG.durationSeconds;
+
+  const autoThresholds =
+    typeof obj.autoThresholds === "boolean"
+      ? obj.autoThresholds
+      : DEFAULT_TIMER_CONFIG.autoThresholds;
+
+  const rawWarn =
+    typeof obj.warnSeconds === "number" && Number.isFinite(obj.warnSeconds)
+      ? obj.warnSeconds
+      : DEFAULT_TIMER_CONFIG.warnSeconds;
+
+  const rawCritical =
+    typeof obj.criticalSeconds === "number" && Number.isFinite(obj.criticalSeconds)
+      ? obj.criticalSeconds
+      : DEFAULT_TIMER_CONFIG.criticalSeconds;
+
+  const thresholds = autoThresholds
+    ? computeAutoThresholds(durationSeconds)
+    : normalizeThresholds(durationSeconds, rawWarn, rawCritical);
+
+  return {
+    durationSeconds,
+    warnSeconds: thresholds.warnSeconds,
+    criticalSeconds: thresholds.criticalSeconds,
+    autoThresholds,
+    sessionTitle: typeof obj.sessionTitle === "string" ? obj.sessionTitle.slice(0, 60) : "",
+    showClock: typeof obj.showClock === "boolean" ? obj.showClock : DEFAULT_TIMER_CONFIG.showClock,
+    showEndEta:
+      typeof obj.showEndEta === "boolean" ? obj.showEndEta : DEFAULT_TIMER_CONFIG.showEndEta,
+    countUpOvertime:
+      typeof obj.countUpOvertime === "boolean"
+        ? obj.countUpOvertime
+        : DEFAULT_TIMER_CONFIG.countUpOvertime,
+  };
 }
 
 export function computeTimerPhase(
@@ -143,6 +188,18 @@ function pad2(n: number): string {
   return String(n).padStart(2, "0");
 }
 
+function formatSecondsAsClockDigits(totalSec: number): string {
+  if (totalSec >= 100 * 60) {
+    const hours = Math.floor(totalSec / 3600);
+    const mins = Math.floor((totalSec % 3600) / 60);
+    const secs = totalSec % 60;
+    return `${hours}:${pad2(mins)}:${pad2(secs)}`;
+  }
+  const mins = Math.floor(totalSec / 60);
+  const secs = totalSec % 60;
+  return `${pad2(mins)}:${pad2(secs)}`;
+}
+
 export function formatRemainingTime(remainingMs: number, countUpOvertime = true): FormattedTime {
   if (remainingMs <= 0) {
     const overSec = Math.floor(Math.abs(remainingMs) / 1000);
@@ -153,38 +210,24 @@ export function formatRemainingTime(remainingMs: number, countUpOvertime = true)
         totalWholeSeconds: 0,
       };
     }
-    const mins = Math.floor(overSec / 60);
-    const secs = overSec % 60;
     return {
-      digits: `+${pad2(mins)}:${pad2(secs)}`,
+      digits: `+${formatSecondsAsClockDigits(overSec)}`,
       isOvertime: true,
       totalWholeSeconds: -overSec,
     };
   }
 
   const totalSec = Math.ceil(remainingMs / 1000);
-  if (totalSec >= 100 * 60) {
-    const hours = Math.floor(totalSec / 3600);
-    const mins = Math.floor((totalSec % 3600) / 60);
-    const secs = totalSec % 60;
-    return {
-      digits: `${hours}:${pad2(mins)}:${pad2(secs)}`,
-      isOvertime: false,
-      totalWholeSeconds: totalSec,
-    };
-  }
-
-  const mins = Math.floor(totalSec / 60);
-  const secs = totalSec % 60;
   return {
-    digits: `${pad2(mins)}:${pad2(secs)}`,
+    digits: formatSecondsAsClockDigits(totalSec),
     isOvertime: false,
     totalWholeSeconds: totalSec,
   };
 }
 
-export function formatClockTime(timestampMs: number): string {
-  const d = new Date(timestampMs);
+export function formatClockTime(timestampMs: number, roundNearestMinute = false): string {
+  const target = roundNearestMinute ? Math.round(timestampMs / 60_000) * 60_000 : timestampMs;
+  const d = new Date(target);
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 

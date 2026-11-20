@@ -1,4 +1,4 @@
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, readonly, ref, watch } from "vue";
 import { useWakeLock } from "@/composables/useWakeLock";
 import type { PresetItem, TimerConfig, TimerPhase, TimerStatus } from "@/types/timer";
 import {
@@ -10,53 +10,139 @@ import {
   formatRemainingTime,
   normalizeThresholds,
   parseQueryConfig,
+  sanitizeConfig,
   TECHRAMEN_PRESETS,
 } from "@/utils/timerLogic";
 
-const STORAGE_KEY = "techramen-2026-session-timer:v1";
+const CONFIG_STORAGE_KEY = "techramen-2026-session-timer:v1";
+const RUNTIME_STORAGE_KEY = "techramen-2026-session-timer:runtime:v1";
+const MAX_RESTORE_AGE_MS = 12 * 60 * 60 * 1000;
 
-function loadInitialConfig(): TimerConfig {
+interface PersistedRuntimeState {
+  status: "running" | "paused";
+  durationSeconds: number;
+  endWallMs?: number;
+  remainingMs?: number;
+  savedAt: number;
+}
+
+function getMonoNow(): number {
+  return typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+}
+
+function loadInitialConfig(): { config: TimerConfig; hasQueryOverride: boolean } {
   let base: TimerConfig = { ...DEFAULT_TIMER_CONFIG };
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(CONFIG_STORAGE_KEY);
     if (raw) {
-      const parsed = JSON.parse(raw) as Partial<TimerConfig>;
-      base = { ...base, ...parsed };
+      base = sanitizeConfig(JSON.parse(raw));
     }
   } catch {
     // ignore storage errors
   }
 
+  let hasQueryOverride = false;
   if (typeof window !== "undefined" && window.location.search) {
     const fromQuery = parseQueryConfig(window.location.search);
-    base = { ...base, ...fromQuery };
+    if (Object.keys(fromQuery).length > 0) {
+      hasQueryOverride = true;
+      base = sanitizeConfig({ ...base, ...fromQuery });
+    }
   }
 
-  const durationSeconds = clampDurationSeconds(base.durationSeconds);
-  const thresholds = base.autoThresholds
-    ? computeAutoThresholds(durationSeconds)
-    : normalizeThresholds(durationSeconds, base.warnSeconds, base.criticalSeconds);
+  return { config: base, hasQueryOverride };
+}
 
-  return {
-    ...base,
-    durationSeconds,
-    warnSeconds: thresholds.warnSeconds,
-    criticalSeconds: thresholds.criticalSeconds,
-  };
+function loadPersistedRuntimeState(durationSeconds: number): {
+  status: TimerStatus;
+  remainingMs: number;
+  endWallMs: number | null;
+} {
+  try {
+    const raw = localStorage.getItem(RUNTIME_STORAGE_KEY);
+    if (!raw) {
+      return { status: "idle", remainingMs: durationSeconds * 1000, endWallMs: null };
+    }
+    const parsed = JSON.parse(raw) as Partial<PersistedRuntimeState>;
+    const now = Date.now();
+    if (
+      typeof parsed.savedAt !== "number" ||
+      !Number.isFinite(parsed.savedAt) ||
+      now - parsed.savedAt > MAX_RESTORE_AGE_MS ||
+      parsed.durationSeconds !== durationSeconds
+    ) {
+      return { status: "idle", remainingMs: durationSeconds * 1000, endWallMs: null };
+    }
+
+    if (
+      parsed.status === "paused" &&
+      typeof parsed.remainingMs === "number" &&
+      Number.isFinite(parsed.remainingMs)
+    ) {
+      return {
+        status: "paused",
+        remainingMs: parsed.remainingMs,
+        endWallMs: null,
+      };
+    }
+
+    if (
+      parsed.status === "running" &&
+      typeof parsed.endWallMs === "number" &&
+      Number.isFinite(parsed.endWallMs)
+    ) {
+      const rem = parsed.endWallMs - now;
+      // Ignore stale sessions that ended hours ago
+      if (rem < -4 * 60 * 60 * 1000) {
+        return { status: "idle", remainingMs: durationSeconds * 1000, endWallMs: null };
+      }
+      return {
+        status: "running",
+        remainingMs: rem,
+        endWallMs: parsed.endWallMs,
+      };
+    }
+  } catch {
+    // ignore corrupted storage
+  }
+
+  return { status: "idle", remainingMs: durationSeconds * 1000, endWallMs: null };
+}
+
+function savePersistedRuntimeState(state: PersistedRuntimeState | null): void {
+  try {
+    if (!state) {
+      localStorage.removeItem(RUNTIME_STORAGE_KEY);
+    } else {
+      localStorage.setItem(RUNTIME_STORAGE_KEY, JSON.stringify(state));
+    }
+  } catch {
+    // ignore storage errors
+  }
 }
 
 export function useTimer() {
-  const config = reactive<TimerConfig>(loadInitialConfig());
-  const status = ref<TimerStatus>("idle");
-  const remainingMs = ref<number>(config.durationSeconds * 1000);
+  const { config: initialConfig, hasQueryOverride } = loadInitialConfig();
+  const config = reactive<TimerConfig>(initialConfig);
+
+  const restored = hasQueryOverride
+    ? { status: "idle" as TimerStatus, remainingMs: config.durationSeconds * 1000, endWallMs: null }
+    : loadPersistedRuntimeState(config.durationSeconds);
+
+  const status = ref<TimerStatus>(restored.status);
+  const remainingMs = ref<number>(restored.remainingMs);
   const nowMs = ref<number>(Date.now());
+  const expectedEndWallMs = ref<number | null>(restored.endWallMs);
   const activePresetId = ref<string | null>(findMatchingPresetId(config));
 
   const wakeLock = useWakeLock();
 
-  let targetEndMs = 0;
-  let rafId = 0;
-  let intervalId = 0;
+  // Monotonic clock target prevents NTP clock jumps from warping active countdowns
+  let endMonoMs = restored.status === "running" ? getMonoNow() + restored.remainingMs : 0;
+  let tickTimeoutId = 0;
+  let clockIntervalId = 0;
 
   function findMatchingPresetId(cfg: TimerConfig): string | null {
     const matched = TECHRAMEN_PRESETS.find(
@@ -95,66 +181,98 @@ export function useTimer() {
 
   const endEtaClock = computed(() => {
     if (status.value === "idle") {
-      return formatClockTime(nowMs.value + config.durationSeconds * 1000);
+      return formatClockTime(nowMs.value + config.durationSeconds * 1000, true);
     }
-    if (remainingMs.value <= 0) {
-      return formatClockTime(nowMs.value);
+    if (status.value === "running" && expectedEndWallMs.value !== null) {
+      return formatClockTime(expectedEndWallMs.value, true);
     }
-    return formatClockTime(nowMs.value + remainingMs.value);
+    return formatClockTime(nowMs.value + remainingMs.value, true);
   });
 
-  function syncTick(): void {
-    const current = Date.now();
-    nowMs.value = current;
-
+  function persistRuntime(): void {
+    if (status.value === "idle") {
+      savePersistedRuntimeState(null);
+      return;
+    }
     if (status.value === "running") {
-      remainingMs.value = targetEndMs - current;
+      savePersistedRuntimeState({
+        status: "running",
+        durationSeconds: config.durationSeconds,
+        endWallMs: expectedEndWallMs.value ?? Date.now() + remainingMs.value,
+        savedAt: Date.now(),
+      });
+      return;
+    }
+    savePersistedRuntimeState({
+      status: "paused",
+      durationSeconds: config.durationSeconds,
+      remainingMs: remainingMs.value,
+      savedAt: Date.now(),
+    });
+  }
+
+  function clearTickTimer(): void {
+    if (tickTimeoutId) {
+      window.clearTimeout(tickTimeoutId);
+      tickTimeoutId = 0;
     }
   }
 
-  function startLoop(): void {
-    stopLoop();
-    const step = () => {
-      syncTick();
-      if (status.value === "running") {
-        rafId = window.requestAnimationFrame(step);
-      }
-    };
-    rafId = window.requestAnimationFrame(step);
-    // Backup interval when tab/screen dims or rAF throttles
-    intervalId = window.setInterval(syncTick, 250);
+  function scheduleNextTick(): void {
+    clearTickTimer();
+    if (status.value !== "running") return;
+
+    const rem = endMonoMs - getMonoNow();
+    let delayMs: number;
+    if (rem > 0) {
+      const mod = rem % 1000;
+      delayMs = mod === 0 ? 1000 : mod;
+    } else {
+      const mod = Math.abs(rem) % 1000;
+      delayMs = 1000 - mod;
+    }
+
+    tickTimeoutId = window.setTimeout(
+      () => {
+        syncTick();
+        scheduleNextTick();
+      },
+      Math.max(4, delayMs),
+    );
   }
 
-  function stopLoop(): void {
-    if (rafId) {
-      window.cancelAnimationFrame(rafId);
-      rafId = 0;
-    }
-    if (intervalId) {
-      window.clearInterval(intervalId);
-      intervalId = 0;
+  function syncTick(): void {
+    nowMs.value = Date.now();
+    if (status.value === "running") {
+      remainingMs.value = endMonoMs - getMonoNow();
     }
   }
 
   function start(): void {
     if (status.value === "running") return;
 
-    const current = Date.now();
-    nowMs.value = current;
+    const monoNow = getMonoNow();
+    const wallNow = Date.now();
+    nowMs.value = wallNow;
+
     if (status.value === "idle") {
       remainingMs.value = config.durationSeconds * 1000;
     }
-    targetEndMs = current + remainingMs.value;
+    endMonoMs = monoNow + remainingMs.value;
+    expectedEndWallMs.value = wallNow + remainingMs.value;
     status.value = "running";
-    startLoop();
+    persistRuntime();
+    scheduleNextTick();
     void wakeLock.acquire();
   }
 
   function pause(): void {
     if (status.value !== "running") return;
     syncTick();
+    clearTickTimer();
+    expectedEndWallMs.value = null;
     status.value = "paused";
-    stopLoop();
+    persistRuntime();
     void wakeLock.release();
   }
 
@@ -167,10 +285,12 @@ export function useTimer() {
   }
 
   function reset(): void {
-    stopLoop();
+    clearTickTimer();
+    expectedEndWallMs.value = null;
     status.value = "idle";
     remainingMs.value = config.durationSeconds * 1000;
     nowMs.value = Date.now();
+    persistRuntime();
     void wakeLock.release();
   }
 
@@ -182,10 +302,16 @@ export function useTimer() {
       return;
     }
     if (status.value === "running") {
-      targetEndMs += deltaMs;
+      endMonoMs += deltaMs;
+      if (expectedEndWallMs.value !== null) {
+        expectedEndWallMs.value += deltaMs;
+      }
       syncTick();
+      scheduleNextTick();
+      persistRuntime();
     } else {
       remainingMs.value += deltaMs;
+      persistRuntime();
     }
   }
 
@@ -233,11 +359,26 @@ export function useTimer() {
     activePresetId.value = findMatchingPresetId(config);
   }
 
+  function updateConfig(patch: Partial<TimerConfig>): void {
+    if (typeof patch.sessionTitle === "string") {
+      config.sessionTitle = patch.sessionTitle.slice(0, 60);
+    }
+    if (typeof patch.showClock === "boolean") {
+      config.showClock = patch.showClock;
+    }
+    if (typeof patch.showEndEta === "boolean") {
+      config.showEndEta = patch.showEndEta;
+    }
+    if (typeof patch.countUpOvertime === "boolean") {
+      config.countUpOvertime = patch.countUpOvertime;
+    }
+  }
+
   watch(
-    () => ({ ...config }),
+    config,
     (next) => {
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(next));
       } catch {
         // ignore storage errors
       }
@@ -245,26 +386,42 @@ export function useTimer() {
     { deep: true },
   );
 
-  let clockTimerId = 0;
+  function handleVisibilityChange(): void {
+    if (document.visibilityState !== "visible") return;
+    nowMs.value = Date.now();
+    if (status.value === "running") {
+      syncTick();
+      scheduleNextTick();
+    }
+  }
 
   onMounted(() => {
     nowMs.value = Date.now();
-    clockTimerId = window.setInterval(() => {
+    if (status.value === "running") {
+      syncTick();
+      scheduleNextTick();
+      void wakeLock.acquire();
+    }
+
+    clockIntervalId = window.setInterval(() => {
       if (status.value !== "running") {
         nowMs.value = Date.now();
       }
-    }, 5000);
+    }, 1000);
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
   });
 
   onBeforeUnmount(() => {
-    stopLoop();
-    if (clockTimerId) {
-      window.clearInterval(clockTimerId);
+    clearTickTimer();
+    if (clockIntervalId) {
+      window.clearInterval(clockIntervalId);
     }
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
   });
 
   return {
-    config,
+    config: readonly(config),
     status,
     phase,
     remainingMs,
@@ -285,5 +442,6 @@ export function useTimer() {
     applyDuration,
     setThresholds,
     setAutoThresholds,
+    updateConfig,
   };
 }

@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, ref, useTemplateRef, watch } from "vue";
 import PaperIcons from "@/components/PaperIcons.vue";
 import type { PresetItem, TimerConfig, TimerPhase } from "@/types/timer";
 import { formatDurationLabel, TECHRAMEN_PRESETS } from "@/utils/timerLogic";
 
 const props = defineProps<{
   open: boolean;
+  isTimerActive: boolean;
   config: TimerConfig;
   activePresetId: string | null;
   previewPhase: TimerPhase | null;
@@ -25,38 +26,67 @@ const emit = defineEmits<{
   "install-pwa": [];
 }>();
 
-const customMinutes = ref(Math.floor(props.config.durationSeconds / 60));
-const customSeconds = ref(props.config.durationSeconds % 60);
+const dialogEl = useTemplateRef<HTMLDialogElement>("dialogEl");
 
-const warnMinutes = ref(Math.floor(props.config.warnSeconds / 60));
-const warnRemSeconds = ref(props.config.warnSeconds % 60);
+const customMinutes = ref<number | string>(Math.floor(props.config.durationSeconds / 60));
+const customSeconds = ref<number | string>(props.config.durationSeconds % 60);
 
-const criticalMinutes = ref(Math.floor(props.config.criticalSeconds / 60));
-const criticalRemSeconds = ref(props.config.criticalSeconds % 60);
+const warnMinutes = ref<number | string>(Math.floor(props.config.warnSeconds / 60));
+const warnRemSeconds = ref<number | string>(props.config.warnSeconds % 60);
+
+const criticalMinutes = ref<number | string>(Math.floor(props.config.criticalSeconds / 60));
+const criticalRemSeconds = ref<number | string>(props.config.criticalSeconds % 60);
+
+type PendingChange =
+  | { kind: "preset"; preset: PresetItem; label: string }
+  | { kind: "duration"; seconds: number; label: string };
+
+const pendingChange = ref<PendingChange | null>(null);
+
+function syncFormFromProps(): void {
+  customMinutes.value = Math.floor(props.config.durationSeconds / 60);
+  customSeconds.value = props.config.durationSeconds % 60;
+  warnMinutes.value = Math.floor(props.config.warnSeconds / 60);
+  warnRemSeconds.value = props.config.warnSeconds % 60;
+  criticalMinutes.value = Math.floor(props.config.criticalSeconds / 60);
+  criticalRemSeconds.value = props.config.criticalSeconds % 60;
+}
 
 watch(
-  () => props.open,
-  (isOpen) => {
-    if (!isOpen) return;
-    customMinutes.value = Math.floor(props.config.durationSeconds / 60);
-    customSeconds.value = props.config.durationSeconds % 60;
-    warnMinutes.value = Math.floor(props.config.warnSeconds / 60);
-    warnRemSeconds.value = props.config.warnSeconds % 60;
-    criticalMinutes.value = Math.floor(props.config.criticalSeconds / 60);
-    criticalRemSeconds.value = props.config.criticalSeconds % 60;
+  () => [
+    props.open,
+    props.config.durationSeconds,
+    props.config.warnSeconds,
+    props.config.criticalSeconds,
+  ],
+  ([isOpen], prev) => {
+    const wasOpen = prev?.[0];
+    if (isOpen && !wasOpen) {
+      pendingChange.value = null;
+      syncFormFromProps();
+      const el = dialogEl.value;
+      if (el && !el.open) {
+        if (typeof el.showModal === "function") {
+          el.showModal();
+        } else {
+          el.setAttribute("open", "");
+        }
+      }
+    } else if (!isOpen && wasOpen) {
+      pendingChange.value = null;
+      const el = dialogEl.value;
+      if (el?.open) {
+        if (typeof el.close === "function") {
+          el.close();
+        } else {
+          el.removeAttribute("open");
+        }
+      }
+    } else if (isOpen) {
+      syncFormFromProps();
+    }
   },
-);
-
-watch(
-  () => [props.config.durationSeconds, props.config.warnSeconds, props.config.criticalSeconds],
-  () => {
-    customMinutes.value = Math.floor(props.config.durationSeconds / 60);
-    customSeconds.value = props.config.durationSeconds % 60;
-    warnMinutes.value = Math.floor(props.config.warnSeconds / 60);
-    warnRemSeconds.value = props.config.warnSeconds % 60;
-    criticalMinutes.value = Math.floor(props.config.criticalSeconds / 60);
-    criticalRemSeconds.value = props.config.criticalSeconds % 60;
-  },
+  { flush: "post" },
 );
 
 const previewOptions: { phase: TimerPhase; label: string; swatch: string }[] = [
@@ -74,300 +104,357 @@ const autoThresholdSummary = computed(
     `黄 ${formatDurationLabel(props.config.warnSeconds)} / 赤 ${formatDurationLabel(props.config.criticalSeconds)}`,
 );
 
+function toBoundedInt(raw: number | string, min: number, max: number): number {
+  const n = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, Math.round(n)));
+}
+
+function requestPreset(preset: PresetItem): void {
+  if (props.isTimerActive) {
+    pendingChange.value = {
+      kind: "preset",
+      preset,
+      label: `${preset.tag}（${preset.label}）`,
+    };
+    return;
+  }
+  emit("select-preset", preset);
+}
+
 function submitCustomDuration(): void {
-  const m = Math.max(0, Math.min(180, Number(customMinutes.value) || 0));
-  const s = Math.max(0, Math.min(59, Number(customSeconds.value) || 0));
-  const total = Math.max(10, m * 60 + s);
+  const m = toBoundedInt(customMinutes.value, 0, 180);
+  const s = toBoundedInt(customSeconds.value, 0, 59);
+  const total = Math.max(10, Math.min(180 * 60, m * 60 + s));
+  customMinutes.value = Math.floor(total / 60);
+  customSeconds.value = total % 60;
+
+  if (props.isTimerActive) {
+    pendingChange.value = {
+      kind: "duration",
+      seconds: total,
+      label: formatDurationLabel(total),
+    };
+    return;
+  }
   emit("apply-duration", total);
 }
 
+function confirmPendingChange(): void {
+  const change = pendingChange.value;
+  if (!change) return;
+  pendingChange.value = null;
+  if (change.kind === "preset") {
+    emit("select-preset", change.preset);
+  } else {
+    emit("apply-duration", change.seconds);
+  }
+}
+
 function submitCustomThresholds(): void {
-  const wm = Math.max(0, Number(warnMinutes.value) || 0);
-  const ws = Math.max(0, Math.min(59, Number(warnRemSeconds.value) || 0));
-  const cm = Math.max(0, Number(criticalMinutes.value) || 0);
-  const cs = Math.max(0, Math.min(59, Number(criticalRemSeconds.value) || 0));
+  const wm = toBoundedInt(warnMinutes.value, 0, 179);
+  const ws = toBoundedInt(warnRemSeconds.value, 0, 59);
+  const cm = toBoundedInt(criticalMinutes.value, 0, 179);
+  const cs = toBoundedInt(criticalRemSeconds.value, 0, 59);
   emit("update-thresholds", wm * 60 + ws, cm * 60 + cs);
+}
+
+function handleBackdropClick(event: MouseEvent): void {
+  if (event.target === dialogEl.value) {
+    emit("close");
+  }
 }
 </script>
 
 <template>
-  <Teleport to="body">
-    <div
-      v-if="open"
-      class="drawer-backdrop"
-      role="dialog"
-      aria-modal="true"
-      aria-label="タイマー設定"
-      @click.self="emit('close')"
-    >
-      <div class="drawer-sheet">
-        <span class="tape-strip" aria-hidden="true" />
+  <dialog
+    ref="dialogEl"
+    class="drawer-dialog"
+    aria-label="タイマー設定"
+    @cancel.prevent="emit('close')"
+    @click="handleBackdropClick"
+  >
+    <div v-if="open" class="drawer-sheet">
+      <span class="tape-strip" aria-hidden="true" />
 
-        <header class="drawer-head">
-          <div>
-            <p class="drawer-eyebrow hand">Session Setup</p>
-            <h2 class="drawer-title">セッションタイマー設定</h2>
+      <header class="drawer-head">
+        <div>
+          <p class="drawer-eyebrow hand">Session Setup</p>
+          <h2 class="drawer-title">セッションタイマー設定</h2>
+        </div>
+        <button type="button" class="drawer-close" aria-label="設定を閉じる" @click="emit('close')">
+          <PaperIcons name="close" size="1.25rem" />
+        </button>
+      </header>
+
+      <div class="drawer-body">
+        <!-- 稼働中のリセット確認バナー -->
+        <div v-if="pendingChange" class="confirm-banner" role="alert">
+          <p class="confirm-banner__text">
+            タイマー進行中です。リセットして
+            <strong>{{ pendingChange.label }}</strong> に切り替えますか？
+          </p>
+          <div class="confirm-banner__actions">
+            <button
+              type="button"
+              class="paper-btn apply-btn apply-btn--sm"
+              @click="confirmPendingChange"
+            >
+              リセットして切替
+            </button>
+            <button type="button" class="tag-pill" @click="pendingChange = null">キャンセル</button>
           </div>
-          <button
-            type="button"
-            class="drawer-close"
-            aria-label="設定を閉じる"
-            @click="emit('close')"
-          >
-            <PaperIcons name="close" size="1.25rem" />
-          </button>
-        </header>
+        </div>
 
-        <div class="drawer-body">
-          <!-- 1. プリセット -->
-          <section class="panel-block">
-            <h3 class="block-title">セッション枠プリセット</h3>
-            <div class="preset-grid">
-              <button
-                v-for="preset in TECHRAMEN_PRESETS"
-                :key="preset.id"
-                type="button"
-                class="preset-ticket"
-                :class="{ 'is-active': activePresetId === preset.id }"
-                @click="emit('select-preset', preset)"
-              >
-                <span class="preset-ticket__tag">{{ preset.tag }}</span>
-                <strong class="preset-ticket__time">{{ preset.label }}</strong>
-                <span class="preset-ticket__meta">
-                  黄 {{ formatDurationLabel(preset.warnSeconds) }}・赤
-                  {{ formatDurationLabel(preset.criticalSeconds) }}
-                </span>
-              </button>
-            </div>
-          </section>
+        <!-- 1. プリセット -->
+        <section class="panel-block">
+          <h3 class="block-title">セッション枠プリセット</h3>
+          <div class="preset-grid">
+            <button
+              v-for="preset in TECHRAMEN_PRESETS"
+              :key="preset.id"
+              type="button"
+              class="preset-ticket"
+              :class="{ 'is-active': activePresetId === preset.id }"
+              @click="requestPreset(preset)"
+            >
+              <span class="preset-ticket__tag">{{ preset.tag }}</span>
+              <strong class="preset-ticket__time">{{ preset.label }}</strong>
+              <span class="preset-ticket__meta">
+                黄 {{ formatDurationLabel(preset.warnSeconds) }}・赤
+                {{ formatDurationLabel(preset.criticalSeconds) }}
+              </span>
+            </button>
+          </div>
+        </section>
 
-          <!-- 2. カスタム時間 -->
-          <section class="panel-block">
-            <h3 class="block-title">自由な時間に設定</h3>
-            <form class="inline-form" @submit.prevent="submitCustomDuration">
-              <label class="num-field">
-                <input
-                  v-model.number="customMinutes"
-                  type="number"
-                  min="0"
-                  max="180"
-                  inputmode="numeric"
-                />
+        <!-- 2. カスタム時間 -->
+        <section class="panel-block">
+          <h3 class="block-title">自由な時間に設定</h3>
+          <form class="inline-form" @submit.prevent="submitCustomDuration">
+            <label class="num-field">
+              <input
+                v-model.number="customMinutes"
+                type="number"
+                min="0"
+                max="180"
+                inputmode="numeric"
+              />
+              <span>分</span>
+            </label>
+            <label class="num-field">
+              <input
+                v-model.number="customSeconds"
+                type="number"
+                min="0"
+                max="59"
+                inputmode="numeric"
+              />
+              <span>秒</span>
+            </label>
+            <button type="submit" class="paper-btn apply-btn">この時間でセット</button>
+          </form>
+        </section>
+
+        <!-- 3. 背景色が変わるタイミング & プレビュー -->
+        <section class="panel-block">
+          <div class="block-head-row">
+            <h3 class="block-title">背景色が変わる残り時間</h3>
+            <label class="toggle-chip">
+              <input
+                type="checkbox"
+                :checked="config.autoThresholds"
+                @change="
+                  emit('toggle-auto-thresholds', ($event.target as HTMLInputElement).checked)
+                "
+              />
+              <span>枠に合わせて自動</span>
+            </label>
+          </div>
+
+          <p v-if="config.autoThresholds" class="hint-text">
+            現在の自動設定: <strong>{{ autoThresholdSummary }}</strong>
+          </p>
+
+          <form v-else class="threshold-grid" @submit.prevent="submitCustomThresholds">
+            <div class="threshold-row">
+              <span class="swatch-dot swatch-dot--warn" />
+              <span class="threshold-label">残りわずか（黄）</span>
+              <label class="num-field num-field--sm">
+                <input v-model.number="warnMinutes" type="number" min="0" max="179" />
                 <span>分</span>
               </label>
-              <label class="num-field">
-                <input
-                  v-model.number="customSeconds"
-                  type="number"
-                  min="0"
-                  max="59"
-                  inputmode="numeric"
-                />
+              <label class="num-field num-field--sm">
+                <input v-model.number="warnRemSeconds" type="number" min="0" max="59" />
                 <span>秒</span>
               </label>
-              <button type="submit" class="paper-btn apply-btn">この時間でセット</button>
-            </form>
-          </section>
-
-          <!-- 3. 背景色が変わるタイミング & プレビュー -->
-          <section class="panel-block">
-            <div class="block-head-row">
-              <h3 class="block-title">背景色が変わる残り時間</h3>
-              <label class="toggle-chip">
-                <input
-                  type="checkbox"
-                  :checked="config.autoThresholds"
-                  @change="
-                    emit('toggle-auto-thresholds', ($event.target as HTMLInputElement).checked)
-                  "
-                />
-                <span>枠に合わせて自動</span>
+            </div>
+            <div class="threshold-row">
+              <span class="swatch-dot swatch-dot--critical" />
+              <span class="threshold-label">まもなく終了（赤）</span>
+              <label class="num-field num-field--sm">
+                <input v-model.number="criticalMinutes" type="number" min="0" max="179" />
+                <span>分</span>
+              </label>
+              <label class="num-field num-field--sm">
+                <input v-model.number="criticalRemSeconds" type="number" min="0" max="59" />
+                <span>秒</span>
               </label>
             </div>
+            <button type="submit" class="paper-btn apply-btn apply-btn--sm">しきい値を反映</button>
+          </form>
 
-            <p v-if="config.autoThresholds" class="hint-text">
-              現在の自動設定: <strong>{{ autoThresholdSummary }}</strong>
-            </p>
-
-            <form v-else class="threshold-grid" @submit.prevent="submitCustomThresholds">
-              <div class="threshold-row">
-                <span class="swatch-dot swatch-dot--warn" />
-                <span class="threshold-label">残りわずか（黄）</span>
-                <label class="num-field num-field--sm">
-                  <input v-model.number="warnMinutes" type="number" min="0" max="179" />
-                  <span>分</span>
-                </label>
-                <label class="num-field num-field--sm">
-                  <input v-model.number="warnRemSeconds" type="number" min="0" max="59" />
-                  <span>秒</span>
-                </label>
-              </div>
-              <div class="threshold-row">
-                <span class="swatch-dot swatch-dot--critical" />
-                <span class="threshold-label">まもなく終了（赤）</span>
-                <label class="num-field num-field--sm">
-                  <input v-model.number="criticalMinutes" type="number" min="0" max="179" />
-                  <span>分</span>
-                </label>
-                <label class="num-field num-field--sm">
-                  <input v-model.number="criticalRemSeconds" type="number" min="0" max="59" />
-                  <span>秒</span>
-                </label>
-              </div>
-              <button type="submit" class="paper-btn apply-btn apply-btn--sm">
-                しきい値を反映
+          <div class="preview-strip">
+            <span class="preview-strip__label">
+              <PaperIcons name="eye" size="1rem" /> ステージ色プレビュー:
+            </span>
+            <div class="preview-chips">
+              <button
+                v-for="item in previewOptions"
+                :key="item.phase"
+                type="button"
+                class="preview-chip"
+                :class="{ 'is-selected': previewPhase === item.phase }"
+                @click="emit('set-preview-phase', previewPhase === item.phase ? null : item.phase)"
+              >
+                <span class="swatch-dot" :style="{ backgroundColor: item.swatch }" />
+                {{ item.label }}
               </button>
-            </form>
-
-            <div class="preview-strip">
-              <span class="preview-strip__label">
-                <PaperIcons name="eye" size="1rem" /> ステージ色プレビュー:
-              </span>
-              <div class="preview-chips">
-                <button
-                  v-for="item in previewOptions"
-                  :key="item.phase"
-                  type="button"
-                  class="preview-chip"
-                  :class="{ 'is-selected': previewPhase === item.phase }"
-                  @click="
-                    emit('set-preview-phase', previewPhase === item.phase ? null : item.phase)
-                  "
-                >
-                  <span class="swatch-dot" :style="{ backgroundColor: item.swatch }" />
-                  {{ item.label }}
-                </button>
-                <button
-                  v-if="previewPhase !== null"
-                  type="button"
-                  class="preview-chip preview-chip--clear"
-                  @click="emit('set-preview-phase', null)"
-                >
-                  戻す
-                </button>
-              </div>
+              <button
+                v-if="previewPhase !== null"
+                type="button"
+                class="preview-chip preview-chip--clear"
+                @click="emit('set-preview-phase', null)"
+              >
+                戻す
+              </button>
             </div>
-          </section>
+          </div>
+        </section>
 
-          <!-- 4. 会場・セッション表示 -->
-          <section class="panel-block">
-            <h3 class="block-title">画面表示</h3>
+        <!-- 4. 会場・セッション表示 -->
+        <section class="panel-block">
+          <h3 class="block-title">画面表示</h3>
 
-            <label class="text-field">
-              <span class="text-field__label">会場・セッション名（任意・画面上部に表示）</span>
+          <label class="text-field">
+            <span class="text-field__label">会場・セッション名（任意・画面上部に表示）</span>
+            <input
+              type="text"
+              :value="config.sessionTitle"
+              maxlength="60"
+              placeholder="例: 2F 大ホール / LT大会"
+              @input="
+                emit('update-config', {
+                  sessionTitle: ($event.target as HTMLInputElement).value,
+                })
+              "
+            />
+          </label>
+          <div class="quick-tags">
+            <button
+              v-for="tag in quickRoomTags"
+              :key="tag"
+              type="button"
+              class="tag-pill"
+              @click="emit('update-config', { sessionTitle: tag })"
+            >
+              {{ tag }}
+            </button>
+            <button
+              v-if="config.sessionTitle"
+              type="button"
+              class="tag-pill tag-pill--clear"
+              @click="emit('update-config', { sessionTitle: '' })"
+            >
+              クリア
+            </button>
+          </div>
+
+          <div class="check-list">
+            <label class="toggle-chip">
               <input
-                type="text"
-                :value="config.sessionTitle"
-                maxlength="60"
-                placeholder="例: 2F 大ホール / LT大会"
-                @input="
+                type="checkbox"
+                :checked="config.showClock"
+                @change="
                   emit('update-config', {
-                    sessionTitle: ($event.target as HTMLInputElement).value,
+                    showClock: ($event.target as HTMLInputElement).checked,
                   })
                 "
               />
+              <span>現在時刻を表示</span>
             </label>
-            <div class="quick-tags">
-              <button
-                v-for="tag in quickRoomTags"
-                :key="tag"
-                type="button"
-                class="tag-pill"
-                @click="emit('update-config', { sessionTitle: tag })"
-              >
-                {{ tag }}
-              </button>
-              <button
-                v-if="config.sessionTitle"
-                type="button"
-                class="tag-pill tag-pill--clear"
-                @click="emit('update-config', { sessionTitle: '' })"
-              >
-                クリア
-              </button>
-            </div>
+            <label class="toggle-chip">
+              <input
+                type="checkbox"
+                :checked="config.showEndEta"
+                @change="
+                  emit('update-config', {
+                    showEndEta: ($event.target as HTMLInputElement).checked,
+                  })
+                "
+              />
+              <span>終了予定を表示</span>
+            </label>
+            <label class="toggle-chip">
+              <input
+                type="checkbox"
+                :checked="config.countUpOvertime"
+                @change="
+                  emit('update-config', {
+                    countUpOvertime: ($event.target as HTMLInputElement).checked,
+                  })
+                "
+              />
+              <span>00:00 以降も超過時間をカウント</span>
+            </label>
+          </div>
+        </section>
 
-            <div class="check-list">
-              <label class="toggle-chip">
-                <input
-                  type="checkbox"
-                  :checked="config.showClock"
-                  @change="
-                    emit('update-config', {
-                      showClock: ($event.target as HTMLInputElement).checked,
-                    })
-                  "
-                />
-                <span>現在時刻を表示</span>
-              </label>
-              <label class="toggle-chip">
-                <input
-                  type="checkbox"
-                  :checked="config.showEndEta"
-                  @change="
-                    emit('update-config', {
-                      showEndEta: ($event.target as HTMLInputElement).checked,
-                    })
-                  "
-                />
-                <span>終了予定を表示</span>
-              </label>
-              <label class="toggle-chip">
-                <input
-                  type="checkbox"
-                  :checked="config.countUpOvertime"
-                  @change="
-                    emit('update-config', {
-                      countUpOvertime: ($event.target as HTMLInputElement).checked,
-                    })
-                  "
-                />
-                <span>00:00 以降も超過時間をカウント</span>
-              </label>
-            </div>
-          </section>
-
-          <!-- 5. タブレット PWA 案内 -->
-          <section v-if="!isStandalone" class="panel-block pwa-card">
-            <h3 class="block-title">タブレットへのインストール（PWA）</h3>
-            <p class="hint-text">
-              ホーム画面に追加すると、ブラウザの枠なしで全画面表示され、オフライン会場でも動作します。
-            </p>
-            <div v-if="canInstallPrompt" class="pwa-actions">
-              <button type="button" class="paper-btn apply-btn" @click="emit('install-pwa')">
-                <PaperIcons name="download" size="1.05rem" /> アプリをインストール
-              </button>
-            </div>
-            <p v-else-if="isIosOrIpadOs" class="hint-text hint-text--steps">
-              iPad / iPhone の Safari では、画面上部の <strong>共有ボタン（□↑）</strong> →
-              <strong>「ホーム画面に追加」</strong> をタップしてください。
-            </p>
-            <p v-else class="hint-text">
-              ブラウザのメニューから「ホーム画面に追加」または「アプリをインストール」を選択できます。
-            </p>
-          </section>
-        </div>
+        <!-- 5. タブレット PWA 案内 -->
+        <section v-if="!isStandalone" class="panel-block pwa-card">
+          <h3 class="block-title">タブレットへのインストール（PWA）</h3>
+          <p class="hint-text">
+            ホーム画面に追加すると、ブラウザの枠なしで全画面表示され、オフライン会場でも動作します。
+          </p>
+          <div v-if="canInstallPrompt" class="pwa-actions">
+            <button type="button" class="paper-btn apply-btn" @click="emit('install-pwa')">
+              <PaperIcons name="download" size="1.05rem" /> アプリをインストール
+            </button>
+          </div>
+          <p v-else-if="isIosOrIpadOs" class="hint-text hint-text--steps">
+            iPad / iPhone の Safari では、画面上部の <strong>共有ボタン（□↑）</strong> →
+            <strong>「ホーム画面に追加」</strong> をタップしてください。
+          </p>
+          <p v-else class="hint-text">
+            ブラウザのメニューから「ホーム画面に追加」または「アプリをインストール」を選択できます。
+          </p>
+        </section>
       </div>
     </div>
-  </Teleport>
+  </dialog>
 </template>
 
 <style scoped>
-.drawer-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: grid;
-  place-items: center;
+.drawer-dialog {
+  margin: auto;
   padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
     max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+  border: 0;
+  background: transparent;
+  max-width: none;
+  max-height: none;
+  width: min(100%, 46rem);
+  overflow: visible;
+}
+
+.drawer-dialog::backdrop {
   background: rgba(28, 20, 18, 0.56);
   backdrop-filter: blur(4px);
 }
 
 .drawer-sheet {
   position: relative;
-  width: min(100%, 44rem);
+  width: 100%;
   max-height: min(90dvh, 52rem);
   display: flex;
   flex-direction: column;
@@ -425,6 +512,28 @@ function submitCustomThresholds(): void {
   padding: 1rem 1.5rem 1.6rem;
   display: grid;
   gap: 1.25rem;
+}
+
+.confirm-banner {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.85rem 1rem;
+  border-radius: 12px;
+  background: #fdf0d5;
+  border: 1.5px solid var(--wine);
+}
+
+.confirm-banner__text {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--ink);
+}
+
+.confirm-banner__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
 }
 
 .panel-block {

@@ -3,10 +3,13 @@ import {
   clampDurationSeconds,
   computeAutoThresholds,
   computeTimerPhase,
+  DEFAULT_TIMER_CONFIG,
+  formatClockTime,
   formatDurationLabel,
   formatRemainingTime,
   normalizeThresholds,
   parseQueryConfig,
+  sanitizeConfig,
 } from "@/utils/timerLogic";
 
 describe("timerLogic", () => {
@@ -28,6 +31,22 @@ describe("timerLogic", () => {
     expect(normalizeThresholds(300, 60, 60)).toEqual({ warnSeconds: 60, criticalSeconds: 59 });
   });
 
+  it("sanitizes corrupted or legacy config objects safely", () => {
+    expect(
+      sanitizeConfig({
+        durationSeconds: Number.NaN,
+        autoThresholds: "yes",
+        warnSeconds: "bad",
+        showClock: 123,
+        sessionTitle: "  Track A  ",
+        chimeMode: "end-only",
+      }),
+    ).toEqual({
+      ...DEFAULT_TIMER_CONFIG,
+      sessionTitle: "  Track A  ",
+    });
+  });
+
   it("computes timer phases accurately", () => {
     expect(computeTimerPhase("idle", 300_000, 60, 30)).toBe("ready");
     expect(computeTimerPhase("running", 120_000, 60, 30)).toBe("normal");
@@ -38,7 +57,7 @@ describe("timerLogic", () => {
     expect(computeTimerPhase("running", -5_200, 60, 30)).toBe("overtime");
   });
 
-  it("formats remaining time using ceiling seconds and overtime count-up", () => {
+  it("formats remaining time using ceiling seconds and symmetric overtime formatting", () => {
     expect(formatRemainingTime(300_000).digits).toBe("05:00");
     expect(formatRemainingTime(299_100).digits).toBe("05:00");
     expect(formatRemainingTime(299_000).digits).toBe("04:59");
@@ -47,6 +66,16 @@ describe("timerLogic", () => {
     expect(formatRemainingTime(-5_400, true).digits).toBe("+00:05");
     expect(formatRemainingTime(-5_400, false).digits).toBe("00:00");
     expect(formatRemainingTime(6_000_000).digits).toBe("1:40:00");
+    expect(formatRemainingTime(-6_000_000, true).digits).toBe("+1:40:00");
+  });
+
+  it("formats clock time with optional nearest-minute rounding", () => {
+    const t1 = new Date("2026-11-21T15:02:10+09:00").getTime();
+    const t2 = new Date("2026-11-21T15:02:50+09:00").getTime();
+    expect(formatClockTime(t1)).toBe("15:02");
+    expect(formatClockTime(t2)).toBe("15:02");
+    expect(formatClockTime(t1, true)).toBe("15:02");
+    expect(formatClockTime(t2, true)).toBe("15:03");
   });
 
   it("formats Japanese duration labels cleanly", () => {
