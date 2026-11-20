@@ -1,0 +1,40 @@
+{
+  "id": "./",
+  "name": "TechRAMEN 2026 セッションタイマー",
+  "short_name": "Session Timer",
+  "description": "技術イベントのセッション発表で残り時間を伝えるための、手作り×富良野ワイントンマナのPWAセッションタイマー",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f3e8d8",
+  "theme_color": "#5b2a4e",
+  "lang": "ja",
+  "categories": ["utilities", "productivity"],
+  "icons": [
+    {
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "./favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
