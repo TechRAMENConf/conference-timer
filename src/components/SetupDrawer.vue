@@ -650,7 +650,7 @@ function handleBackdropClick(event: MouseEvent): void {
 
 .num-field--sm input {
   width: 2.7rem;
-  font-size: 1rem;
+  font-size: max(16px, 1rem);
 }
 
 .apply-btn {
@@ -763,7 +763,7 @@ function handleBackdropClick(event: MouseEvent): void {
   border: 1.5px solid rgba(46, 40, 38, 0.24);
   border-radius: 10px;
   background: var(--snow);
-  font-size: 0.95rem;
+  font-size: max(16px, 1rem);
 }
 
 .quick-tags {
