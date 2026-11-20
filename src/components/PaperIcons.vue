@@ -6,8 +6,6 @@ export type PaperIconName =
   | "sliders"
   | "lock"
   | "unlock"
-  | "bell"
-  | "bell-off"
   | "fullscreen"
   | "exit-fullscreen"
   | "download"
@@ -65,16 +63,6 @@ withDefaults(
     <template v-else-if="name === 'unlock'">
       <rect x="5" y="10.5" width="14" height="10" rx="2.5" />
       <path d="M8 10.5 V7.5 A4 4 0 0 1 15.6 6" />
-    </template>
-    <template v-else-if="name === 'bell'">
-      <path d="M6 16.5 H18 L16.6 14 V10 A4.6 4.6 0 0 0 7.4 10 V14 Z" />
-      <path d="M10.2 19.2 A2 2 0 0 0 13.8 19.2" />
-    </template>
-    <template v-else-if="name === 'bell-off'">
-      <path d="M8.5 6.8 A4.6 4.6 0 0 1 16.6 10 V14 L17.6 15.8" />
-      <path d="M6 16.5 H14.5" />
-      <path d="M7.4 10 V14 L6 16.5" />
-      <path d="M4 4 L20 20" />
     </template>
     <template v-else-if="name === 'fullscreen'">
       <path d="M4 9 V4 H9 M15 4 H20 V9 M20 15 V20 H15 M9 20 H4 V15" />

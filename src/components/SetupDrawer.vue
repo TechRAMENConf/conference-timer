@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import PaperIcons from "@/components/PaperIcons.vue";
-import type { ChimeMode, PresetItem, TimerConfig, TimerPhase } from "@/types/timer";
+import type { PresetItem, TimerConfig, TimerPhase } from "@/types/timer";
 import { formatDurationLabel, TECHRAMEN_PRESETS } from "@/utils/timerLogic";
 
 const props = defineProps<{
@@ -21,7 +21,6 @@ const emit = defineEmits<{
   "update-thresholds": [warnSeconds: number, criticalSeconds: number];
   "toggle-auto-thresholds": [enabled: boolean];
   "update-config": [patch: Partial<TimerConfig>];
-  "test-chime": [];
   "set-preview-phase": [phase: TimerPhase | null];
   "install-pwa": [];
 }>();
@@ -69,12 +68,6 @@ const previewOptions: { phase: TimerPhase; label: string; swatch: string }[] = [
 ];
 
 const quickRoomTags = ["2F 大ホール", "1F ラウンジ", "LT大会", "Keynote"];
-
-const chimeOptions: { value: ChimeMode; label: string }[] = [
-  { value: "off", label: "鳴らさない" },
-  { value: "end-only", label: "終了時のみ" },
-  { value: "warn-and-end", label: "予告＋終了" },
-];
 
 const autoThresholdSummary = computed(
   () =>
@@ -256,9 +249,9 @@ function submitCustomThresholds(): void {
             </div>
           </section>
 
-          <!-- 4. 会場・セッション表示 & チャイム -->
+          <!-- 4. 会場・セッション表示 -->
           <section class="panel-block">
-            <h3 class="block-title">表示・チャイム音</h3>
+            <h3 class="block-title">画面表示</h3>
 
             <label class="text-field">
               <span class="text-field__label">会場・セッション名（任意・画面上部に表示）</span>
@@ -291,25 +284,6 @@ function submitCustomThresholds(): void {
                 @click="emit('update-config', { sessionTitle: '' })"
               >
                 クリア
-              </button>
-            </div>
-
-            <div class="chime-row">
-              <span class="chime-row__label">チャイム音</span>
-              <div class="segmented">
-                <button
-                  v-for="opt in chimeOptions"
-                  :key="opt.value"
-                  type="button"
-                  class="segmented__btn"
-                  :class="{ 'is-active': config.chimeMode === opt.value }"
-                  @click="emit('update-config', { chimeMode: opt.value })"
-                >
-                  {{ opt.label }}
-                </button>
-              </div>
-              <button type="button" class="tag-pill" @click="emit('test-chime')">
-                <PaperIcons name="bell" size="0.95rem" /> 試聴
               </button>
             </div>
 
@@ -702,40 +676,6 @@ function submitCustomThresholds(): void {
 .tag-pill--clear {
   background: transparent;
   color: var(--ink-soft);
-}
-
-.chime-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.6rem;
-}
-
-.chime-row__label {
-  font-size: 0.9rem;
-  font-weight: 700;
-}
-
-.segmented {
-  display: inline-flex;
-  border-radius: 10px;
-  overflow: hidden;
-  border: 1.5px solid rgba(91, 42, 78, 0.28);
-  background: var(--paper);
-}
-
-.segmented__btn {
-  border: 0;
-  background: transparent;
-  padding: 0.4rem 0.75rem;
-  font-size: 0.82rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.segmented__btn.is-active {
-  background: var(--grape);
-  color: var(--snow);
 }
 
 .check-list {

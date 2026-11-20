@@ -1,7 +1,6 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useWakeLock } from "@/composables/useWakeLock";
 import type { PresetItem, TimerConfig, TimerPhase, TimerStatus } from "@/types/timer";
-import { playChime, unlockAudio } from "@/utils/chime";
 import {
   clampDurationSeconds,
   computeAutoThresholds,
@@ -58,7 +57,6 @@ export function useTimer() {
   let targetEndMs = 0;
   let rafId = 0;
   let intervalId = 0;
-  let lastPhase: TimerPhase = "ready";
 
   function findMatchingPresetId(cfg: TimerConfig): string | null {
     const matched = TECHRAMEN_PRESETS.find(
@@ -105,34 +103,12 @@ export function useTimer() {
     return formatClockTime(nowMs.value + remainingMs.value);
   });
 
-  function maybePlayPhaseChime(nextPhase: TimerPhase, prevPhase: TimerPhase): void {
-    if (nextPhase === prevPhase || config.chimeMode === "off") return;
-
-    if (nextPhase === "warning" && config.chimeMode === "warn-and-end") {
-      playChime("warning");
-    } else if (nextPhase === "critical" && config.chimeMode === "warn-and-end") {
-      playChime("critical");
-    } else if (nextPhase === "overtime") {
-      playChime("overtime");
-    }
-  }
-
   function syncTick(): void {
     const current = Date.now();
     nowMs.value = current;
 
     if (status.value === "running") {
-      const nextRemaining = targetEndMs - current;
-      const prevPhase = lastPhase;
-      remainingMs.value = nextRemaining;
-      const nextPhase = computeTimerPhase(
-        "running",
-        nextRemaining,
-        config.warnSeconds,
-        config.criticalSeconds,
-      );
-      lastPhase = nextPhase;
-      maybePlayPhaseChime(nextPhase, prevPhase);
+      remainingMs.value = targetEndMs - current;
     }
   }
 
@@ -161,7 +137,6 @@ export function useTimer() {
   }
 
   function start(): void {
-    unlockAudio();
     if (status.value === "running") return;
 
     const current = Date.now();
@@ -171,12 +146,6 @@ export function useTimer() {
     }
     targetEndMs = current + remainingMs.value;
     status.value = "running";
-    lastPhase = computeTimerPhase(
-      "running",
-      remainingMs.value,
-      config.warnSeconds,
-      config.criticalSeconds,
-    );
     startLoop();
     void wakeLock.acquire();
   }
@@ -201,7 +170,6 @@ export function useTimer() {
     stopLoop();
     status.value = "idle";
     remainingMs.value = config.durationSeconds * 1000;
-    lastPhase = "ready";
     nowMs.value = Date.now();
     void wakeLock.release();
   }
@@ -265,11 +233,6 @@ export function useTimer() {
     activePresetId.value = findMatchingPresetId(config);
   }
 
-  function testChime(): void {
-    unlockAudio();
-    playChime("test");
-  }
-
   watch(
     () => ({ ...config }),
     (next) => {
@@ -322,6 +285,5 @@ export function useTimer() {
     applyDuration,
     setThresholds,
     setAutoThresholds,
-    testChime,
   };
 }

@@ -2,8 +2,6 @@ export type TimerStatus = "idle" | "running" | "paused";
 
 export type TimerPhase = "ready" | "normal" | "warning" | "critical" | "overtime";
 
-export type ChimeMode = "off" | "end-only" | "warn-and-end";
-
 export interface PresetItem {
   id: string;
   label: string;
@@ -18,7 +16,6 @@ export interface TimerConfig {
   warnSeconds: number;
   criticalSeconds: number;
   autoThresholds: boolean;
-  chimeMode: ChimeMode;
   sessionTitle: string;
   showClock: boolean;
   showEndEta: boolean;

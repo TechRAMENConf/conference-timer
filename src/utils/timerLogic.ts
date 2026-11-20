@@ -62,7 +62,6 @@ export const DEFAULT_TIMER_CONFIG: TimerConfig = {
   warnSeconds: 5 * 60,
   criticalSeconds: 60,
   autoThresholds: true,
-  chimeMode: "off",
   sessionTitle: "",
   showClock: true,
   showEndEta: true,

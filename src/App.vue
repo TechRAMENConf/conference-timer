@@ -5,7 +5,7 @@ import PaperIcons from "@/components/PaperIcons.vue";
 import SetupDrawer from "@/components/SetupDrawer.vue";
 import { usePwaInstall } from "@/composables/usePwaInstall";
 import { useTimer } from "@/composables/useTimer";
-import type { ChimeMode, TimerPhase } from "@/types/timer";
+import type { TimerPhase } from "@/types/timer";
 import { formatDurationLabel, TECHRAMEN_PRESETS } from "@/utils/timerLogic";
 
 const {
@@ -29,7 +29,6 @@ const {
   applyDuration,
   setThresholds,
   setAutoThresholds,
-  testChime,
 } = useTimer();
 
 const { isStandalone, canInstallPrompt, isIosOrIpadOs, hasUpdate, triggerInstall, reloadToUpdate } =
@@ -70,28 +69,7 @@ const primaryBtnLabel = computed(() => {
   return "スタート";
 });
 
-const chimeBadgeLabel = computed(() => {
-  switch (config.chimeMode) {
-    case "off":
-      return "音OFF";
-    case "end-only":
-      return "終了音";
-    case "warn-and-end":
-      return "予告+終了";
-  }
-});
-
 const quickPresets = computed(() => TECHRAMEN_PRESETS.slice(0, 4));
-
-function cycleChimeMode(): void {
-  const order: ChimeMode[] = ["off", "end-only", "warn-and-end"];
-  const idx = order.indexOf(config.chimeMode);
-  const next = order[(idx + 1) % order.length] ?? "off";
-  config.chimeMode = next;
-  if (next !== "off") {
-    testChime();
-  }
-}
 
 function handlePrimaryClick(): void {
   if (isLocked.value) return;
@@ -262,17 +240,6 @@ defineExpose({
         </button>
 
         <button
-          v-if="!isLocked"
-          type="button"
-          class="hud-btn"
-          :title="`チャイム設定を切り替え（現在: ${chimeBadgeLabel}）`"
-          @click="cycleChimeMode"
-        >
-          <PaperIcons :name="config.chimeMode === 'off' ? 'bell-off' : 'bell'" size="1rem" />
-          <span class="hud-btn__label">{{ chimeBadgeLabel }}</span>
-        </button>
-
-        <button
           v-if="supportsFullscreen && !isLocked"
           type="button"
           class="hud-btn"
@@ -440,7 +407,6 @@ defineExpose({
       @update-thresholds="setThresholds"
       @toggle-auto-thresholds="setAutoThresholds"
       @update-config="(patch) => Object.assign(config, patch)"
-      @test-chime="testChime"
       @set-preview-phase="(p) => (previewPhase = p)"
       @install-pwa="triggerInstall"
     />
